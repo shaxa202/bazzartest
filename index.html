@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bazar Live</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background: #f8fafc; }
+    .thumb { width: 64px; height: 64px; object-fit: cover; border-radius: 8px; border: 1px solid #e5e7eb; }
+    .thumb.active { outline: 2px solid #3b82f6; }
+  </style>
+</head>
+<body class="min-h-screen text-gray-800">
+  <!-- Шапка -->
+  <header class="sticky top-0 bg-white border-b p-3">
+    <div class="flex justify-between items-center">
+      <h1 class="font-bold text-xl">🛍️ Bazar Live</h1>
+      <div id="authBar"></div>
+    </div>
+  </header>
+
+  <!-- Основной контент -->
+  <main class="container mx-auto p-3">
+    <!-- Поиск и фильтры -->
+    <div class="mb-4 flex flex-col gap-2">
+      <input id="searchInput" type="text" placeholder="Поиск..." class="border p-2 rounded-lg">
+      <div class="flex gap-2">
+        <select id="sortSelect" class="border p-2 rounded-lg flex-1">
+          <option value="new">Новые</option>
+          <option value="cheap">Дешевые</option>
+        </select>
+        <button id="addBtn" class="bg-blue-600 text-white p-2 rounded-lg">+ Добавить</button>
+      </div>
+    </div>
+
+    <!-- Список объявлений -->
+    <div id="adsGrid" class="grid grid-cols-1 sm:grid-cols-2 gap-3"></div>
+    
+    <!-- Пустое состояние -->
+    <div id="emptyState" class="hidden text-center py-10 text-gray-500">
+      <p>Объявлений пока нет</p>
+    </div>
+  </main>
+
+  <!-- Модальное окно добавления -->
+  <dialog id="adModal" class="w-full max-w-md rounded-lg border p-0">
+    <form method="dialog" class="p-4">
+      <div class="flex justify-between items-center mb-3">
+        <h3 class="font-bold text-lg">Новое объявление</h3>
+        <button id="closeModal" class="text-xl">&times;</button>
+      </div>
+      
+      <div class="space-y-3">
+        <input id="adTitle" placeholder="Название*" class="w-full border p-2 rounded-lg" required>
+        <textarea id="adDesc" placeholder="Описание*" rows="3" class="w-full border p-2 rounded-lg" required></textarea>
+        <div class="grid grid-cols-2 gap-3">
+          <input id="adPrice" type="number" placeholder="Цена*" class="border p-2 rounded-lg" required>
+          <select id="adCurrency" class="border p-2 rounded-lg">
+            <option value="RUB">₽</option>
+            <option value="USD">$</option>
+          </select>
+        </div>
+        <input id="adLocation" placeholder="Город*" class="w-full border p-2 rounded-lg" required>
+        <input id="adPhone" placeholder="Телефон*" class="w-full border p-2 rounded-lg" required>
+        
+        <div>
+          <label class="block mb-1">Фото (макс. 3):</label>
+          <input id="adImages" type="file" accept="image/*" multiple class="w-full border p-2 rounded-lg">
+          <div id="adThumbs" class="flex gap-2 mt-2"></div>
+          <img id="adPreview" class="mt-2 w-full hidden border rounded-lg">
+        </div>
+        
+        <button id="saveAd" class="w-full bg-blue-600 text-white p-3 rounded-lg font-bold">
+          Сохранить
+        </button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Просмотр объявления -->
+  <dialog id="viewDialog" class="w-full max-w-md rounded-lg border p-0">
+    <div class="p-4">
+      <div class="aspect-[4/3] bg-gray-100 rounded-lg mb-3 overflow-hidden">
+        <img id="viewImg" class="w-full h-full object-cover">
+      </div>
+      
+      <div class="space-y-2">
+        <h3 id="viewTitle" class="font-bold text-lg"></h3>
+        <div class="flex items-center gap-2">
+          <span id="viewPrice" class="font-bold"></span>
+          <span id="viewLocation" class="text-sm text-gray-600"></span>
+        </div>
+        
+        <div id="viewThumbs" class="flex gap-2 my-2"></div>
+        
+        <p id="viewDesc" class="text-gray-700"></p>
+        <a id="viewPhone" class="block bg-green-600 text-white text-center p-3 rounded-lg font-bold">
+          Позвонить
+        </a>
+        
+        <div id="ownerActions" class="hidden grid grid-cols-2 gap-2 mt-2">
+          <button id="editAdBtn" class="bg-gray-800 text-white p-2 rounded-lg">Изменить</button>
+          <button id="deleteAdBtn" class="bg-red-600 text-white p-2 rounded-lg">Удалить</button>
+        </div>
+        
+        <div class="text-sm text-gray-500 mt-3">
+          <span id="viewUser"></span>
+        </div>
+        
+        <button id="closeView" class="w-full mt-3 border p-2 rounded-lg">
+          Закрыть
+        </button>
+      </div>
+    </div>
+  </dialog>
+
+  <script type="module">
+    import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
+    import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, updateProfile } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
+    import { getFirestore, collection, addDoc, serverTimestamp, query, orderBy, onSnapshot, doc, updateDoc, deleteDoc, getDoc } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+
+    // Firebase config (замените на свои данные)
+    const firebaseConfig = {
+      apiKey: "AIzaSyB7lkappg-4omdbOQ9xa-zgBH81Tq5mr4U",
+      authDomain: "bazarlive-732c1.firebaseapp.com",
+      projectId: "bazarlive-732c1",
+      storageBucket: "bazarlive-732c1.appspot.com",
+      messagingSenderId: "67666176855",
+      appId: "1:67666176855:web:d8fc58628deaca3652ec12"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+
+    // Элементы интерфейса
+    const authBar = document.getElementById('authBar');
+    const addBtn = document.getElementById('addBtn');
+    const searchInput = document.getElementById('searchInput');
+    const sortSelect = document.getElementById('sortSelect');
+    const adsGrid = document.getElementById('adsGrid');
+    const emptyState = document.getElementById('emptyState');
+    const adModal = document.getElementById('adModal');
+    const closeModal = document.getElementById('closeModal');
+    const saveAd = document.getElementById('saveAd');
+    const viewDialog = document.getElementById('viewDialog');
+    const closeView = document.getElementById('closeView');
+
+    // Данные
+    let currentUser = null;
+    let ads = [];
+    let editingAdId = null;
+
+    // Форматирование цены
+    const formatPrice = (price, currency) => {
+      return `${price.toLocaleString('ru-RU')} ${currency === 'USD' ? '$' : '₽'}`;
+    };
+
+    // Преобразование файлов в Base64
+    const filesToBase64 = async (files) => {
+      const base64Images = [];
+      const fileList = Array.from(files).slice(0, 3); // Макс 3 фото
+      
+      for (const file of fileList) {
+        const base64 = await new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onload = (e) => resolve(e.target.result);
+          reader.readAsDataURL(file);
+        });
+        base64Images.push(base64);
+      }
+      
+      return base64Images;
+    };
+
+    // Показать превью фото
+    document.getElementById('adImages').addEventListener('change', function() {
+      const thumbsContainer = document.getElementById('adThumbs');
+      thumbsContainer.innerHTML = '';
+      
+      if (this.files.length > 0) {
+        document.getElementById('adPreview').classList.remove('hidden');
+        
+        Array.from(this.files).slice(0, 3).forEach((file, i) => {
+          const reader = new FileReader();
+          reader.onload = (e) => {
+            const thumb = document.createElement('img');
+            thumb.src = e.target.result;
+            thumb.className = 'thumb' + (i === 0 ? ' active' : '');
+            thumb.onclick = () => {
+              document.querySelectorAll('#adThumbs .thumb').forEach(t => t.classList.remove('active'));
+              thumb.classList.add('active');
+              document.getElementById('adPreview').src = e.target.result;
+            };
+            thumbsContainer.appendChild(thumb);
+            
+            if (i === 0) {
+              document.getElementById('adPreview').src = e.target.result;
+            }
+          };
+          reader.readAsDataURL(file);
+        });
+      }
+    });
+
+    // Авторизация
+    function renderAuthUI() {
+      if (!currentUser) {
+        authBar.innerHTML = `
+          <button id="loginBtn" class="p-1 px-3 rounded-lg border">Войти</button>
+          <button id="registerBtn" class="p-1 px-3 rounded-lg bg-blue-600 text-white">Регистрация</button>
+        `;
+        
+        document.getElementById('loginBtn').onclick = showLoginModal;
+        document.getElementById('registerBtn').onclick = showRegisterModal;
+      } else {
+        authBar.innerHTML = `
+          <span class="text-sm">${currentUser.displayName || currentUser.email}</span>
+          <button id="logoutBtn" class="p-1 px-3 rounded-lg border">Выйти</button>
+        `;
+        document.getElementById('logoutBtn').onclick = () => signOut(auth);
+      }
+    }
+
+    function showLoginModal() {
+      const modal = `
+        <div class="fixed inset-0 bg-black/50 flex items-center justify-center p-4">
+          <div class="bg-white rounded-lg p-4 w-full max-w-sm">
+            <h3 class="font-bold text-lg mb-3">Вход</h3>
+            <input id="loginEmail" type="email" placeholder="Email" class="w-full border p-2 rounded-lg mb-2">
+            <input id="loginPass" type="password" placeholder="Пароль" class="w-full border p-2 rounded-lg mb-3">
+            <button id="confirmLogin" class="w-full bg-blue-600 text-white p-2 rounded-lg">Войти</button>
+          </div>
+        </div>
+      `;
+      
+      const div = document.createElement('div');
+      div.innerHTML = modal;
+      document.body.appendChild(div);
+      
+      document.getElementById('confirmLogin').onclick = async () => {
+        const email = document.getElementById('loginEmail').value;
+        const password = document.getElementById('loginPass').value;
+        
+        try {
+          await signInWithEmailAndPassword(auth, email, password);
+          div.remove();
+        } catch (error) {
+          alert('Ошибка входа: ' + error.message);
+        }
+      };
+      
+      div.querySelector('.bg-black/50').onclick = () => div.remove();
+    }
+
+    function showRegisterModal() {
+      const modal = `
+        <div class="fixed inset-0 bg-black/50 flex items-center justify-center p-4">
+          <div class="bg-white rounded-lg p-4 w-full max-w-sm">
+            <h3 class="font-bold text-lg mb-3">Регистрация</h3>
+            <input id="regName" placeholder="Имя" class="w-full border p-2 rounded-lg mb-2">
+            <input id="regEmail" type="email" placeholder="Email" class="w-full border p-2 rounded-lg mb-2">
+            <input id="regPass" type="password" placeholder="Пароль" class="w-full border p-2 rounded-lg mb-3">
+            <button id="confirmRegister" class="w-full bg-blue-600 text-white p-2 rounded-lg">Зарегистрироваться</button>
+          </div>
+        </div>
+      `;
+      
+      const div = document.createElement('div');
+      div.innerHTML = modal;
+      document.body.appendChild(div);
+      
+      document.getElementById('confirmRegister').onclick = async () => {
+        const name = document.getElementById('regName').value;
+        const email = document.getElementById('regEmail').value;
+        const password = document.getElementById('regPass').value;
+        
+        try {
+          const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+          await updateProfile(userCredential.user, { displayName: name });
+          div.remove();
+        } catch (error) {
+          alert('Ошибка регистрации: ' + error.message);
+        }
+      };
+      
+      div.querySelector('.bg-black/50').onclick = () => div.remove();
+    }
+
+    // Работа с объявлениями
+    async function saveAdHandler() {
+      const title = document.getElementById('adTitle').value.trim();
+      const description = document.getElementById('adDesc').value.trim();
+      const price = Number(document.getElementById('adPrice').value);
+      const currency = document.getElementById('adCurrency').value;
+      const location = document.getElementById('adLocation').value.trim();
+      const phone = document.getElementById('adPhone').value.trim();
+      const images = await filesToBase64(document.getElementById('adImages').files);
+      
+      if (!title || !description || !price || !location || !phone) {
+        alert('Заполните все обязательные поля');
+        return;
+      }
+      
+      try {
+        saveAd.disabled = true;
+        saveAd.textContent = 'Сохранение...';
+        
+        const adData = {
+          title,
+          description,
+          price,
+          currency,
+          location,
+          phone,
+          images,
+          userId: currentUser.uid,
+          userName: currentUser.displayName || currentUser.email,
+          createdAt: serverTimestamp()
+        };
+        
+        if (editingAdId) {
+          await updateDoc(doc(db, 'ads', editingAdId), adData);
+        } else {
+          await addDoc(collection(db, 'ads'), adData);
+        }
+        
+        adModal.close();
+        resetAdForm();
+      } catch (error) {
+        console.error('Ошибка сохранения:', error);
+        alert('Ошибка сохранения: ' + error.message);
+      } finally {
+        saveAd.disabled = false;
+        saveAd.textContent = 'Сохранить';
+      }
+    }
+
+    function resetAdForm() {
+      document.getElementById('adTitle').value = '';
+      document.getElementById('adDesc').value = '';
+      document.getElementById('adPrice').value = '';
+      document.getElementById('adLocation').value = '';
+      document.getElementById('adPhone').value = '';
+      document.getElementById('adImages').value = '';
+      document.getElementById('adThumbs').innerHTML = '';
+      document.getElementById('adPreview').src = '';
+      document.getElementById('adPreview').classList.add('hidden');
+      editingAdId = null;
+    }
+
+    function renderAds() {
+      adsGrid.innerHTML = '';
+      
+      if (ads.length === 0) {
+        emptyState.classList.remove('hidden');
+        return;
+      }
+      
+      emptyState.classList.add('hidden');
+      
+      ads.forEach(ad => {
+        const adElement = document.createElement('div');
+        adElement.className = 'border rounded-lg overflow-hidden bg-white';
+        adElement.innerHTML = `
+          <div class="aspect-[4/3] bg-gray-100">
+            <img src="${ad.images?.[0] || 'https://via.placeholder.com/400x300?text=No+Image'}" class="w-full h-full object-cover">
+          </div>
+          <div class="p-3">
+            <h3 class="font-bold truncate">${ad.title}</h3>
+            <div class="flex justify-between items-center mt-1">
+              <span class="font-bold text-blue-600">${formatPrice(ad.price, ad.currency)}</span>
+              <span class="text-sm text-gray-600">${ad.location}</span>
+            </div>
+            <button class="w-full mt-2 p-2 bg-gray-100 rounded-lg text-sm">Подробнее</button>
+          </div>
+        `;
+        
+        adElement.querySelector('button').onclick = () => showAdDetails(ad);
+        adsGrid.appendChild(adElement);
+      });
+    }
+
+    function showAdDetails(ad) {
+      document.getElementById('viewTitle').textContent = ad.title;
+      document.getElementById('viewPrice').textContent = formatPrice(ad.price, ad.currency);
+      document.getElementById('viewLocation').textContent = ad.location;
+      document.getElementById('viewDesc').textContent = ad.description;
+      document.getElementById('viewPhone').href = `tel:${ad.phone.replace(/\D/g, '')}`;
+      document.getElementById('viewPhone').textContent = `Позвонить: ${ad.phone}`;
+      document.getElementById('viewUser').textContent = ad.userName;
+      
+      // Показываем фотографии
+      const thumbsContainer = document.getElementById('viewThumbs');
+      thumbsContainer.innerHTML = '';
+      
+      if (ad.images && ad.images.length > 0) {
+        document.getElementById('viewImg').src = ad.images[0];
+        
+        ad.images.forEach((img, i) => {
+          const thumb = document.createElement('img');
+          thumb.src = img;
+          thumb.className = 'thumb' + (i === 0 ? ' active' : '');
+          thumb.onclick = () => {
+            document.querySelectorAll('#viewThumbs .thumb').forEach(t => t.classList.remove('active'));
+            thumb.classList.add('active');
+            document.getElementById('viewImg').src = img;
+          };
+          thumbsContainer.appendChild(thumb);
+        });
+      } else {
+        document.getElementById('viewImg').src = 'https://via.placeholder.com/800x600?text=No+Image';
+      }
+      
+      // Показываем кнопки управления для владельца
+      const ownerActions = document.getElementById('ownerActions');
+      if (currentUser && ad.userId === currentUser.uid) {
+        ownerActions.classList.remove('hidden');
+        document.getElementById('editAdBtn').onclick = () => {
+          editingAdId = ad.id;
+          document.getElementById('adTitle').value = ad.title;
+          document.getElementById('adDesc').value = ad.description;
+          document.getElementById('adPrice').value = ad.price;
+          document.getElementById('adCurrency').value = ad.currency;
+          document.getElementById('adLocation').value = ad.location;
+          document.getElementById('adPhone').value = ad.phone;
+          
+          // Показываем превью существующих фото
+          const thumbsContainer = document.getElementById('adThumbs');
+          thumbsContainer.innerHTML = '';
+          
+          if (ad.images && ad.images.length > 0) {
+            document.getElementById('adPreview').src = ad.images[0];
+            document.getElementById('adPreview').classList.remove('hidden');
+            
+            ad.images.forEach((img, i) => {
+              const thumb = document.createElement('img');
+              thumb.src = img;
+              thumb.className = 'thumb' + (i === 0 ? ' active' : '');
+              thumb.onclick = () => {
+                document.querySelectorAll('#adThumbs .thumb').forEach(t => t.classList.remove('active'));
+                thumb.classList.add('active');
+                document.getElementById('adPreview').src = img;
+              };
+              thumbsContainer.appendChild(thumb);
+            });
+          }
+          
+          viewDialog.close();
+          adModal.showModal();
+        };
+        
+        document.getElementById('deleteAdBtn').onclick = async () => {
+          if (confirm('Удалить это объявление?')) {
+            await deleteDoc(doc(db, 'ads', ad.id));
+            viewDialog.close();
+          }
+        };
+      } else {
+        ownerActions.classList.add('hidden');
+      }
+      
+      viewDialog.showModal();
+    }
+
+    // Инициализация
+    onAuthStateChanged(auth, (user) => {
+      currentUser = user;
+      renderAuthUI();
+      addBtn.disabled = !user;
+    });
+
+    // Загрузка объявлений
+    onSnapshot(query(collection(db, 'ads'), orderBy('createdAt', 'desc')), (snapshot) => {
+      ads = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      renderAds();
+    });
+
+    // Обработчики событий
+    addBtn.addEventListener('click', () => {
+      if (!currentUser) {
+        showLoginModal();
+        return;
+      }
+      resetAdForm();
+      adModal.showModal();
+    });
+
+    closeModal.addEventListener('click', () => adModal.close());
+    closeView.addEventListener('click', () => viewDialog.close());
+    saveAd.addEventListener('click', saveAdHandler);
+
+    // Поиск и сортировка
+    searchInput.addEventListener('input', () => {
+      const searchTerm = searchInput.value.toLowerCase();
+      const filteredAds = ads.filter(ad => 
+        ad.title.toLowerCase().includes(searchTerm) || 
+        ad.description.toLowerCase().includes(searchTerm)
+      );
+      ads = filteredAds;
+      renderAds();
+    });
+
+    sortSelect.addEventListener('change', () => {
+      if (sortSelect.value === 'cheap') {
+        ads.sort((a, b) => a.price - b.price);
+      } else {
+        ads.sort((a, b) => b.createdAt?.seconds - a.createdAt?.seconds);
+      }
+      renderAds();
+    });
+  </script>
+</body>
+</html>
